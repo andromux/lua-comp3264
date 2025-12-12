@@ -23,7 +23,7 @@ jobs:
         run: |
           # Instalamos herramientas básicas necesarias dentro del contenedor
           apt-get update
-          apt-get install -y git wget ca-certificates build-essential file
+          apt-get install -y git wget ca-certificates build-essential file sudo
           
           # Solo para el job de 32 bits, instalamos las librerías multilib
           if [ "${{ matrix.architecture }}" = "32" ]; then
