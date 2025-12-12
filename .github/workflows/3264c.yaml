@@ -10,6 +10,7 @@ on:
 
 jobs:
   compile-lua:
+    container: ubuntu:22.04 
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -17,31 +18,38 @@ jobs:
         architecture: [32, 64]
     
     steps:
+      
+      - name: Instalar paquetes base y dependencias
+        run: |
+          # Instalamos herramientas básicas necesarias dentro del contenedor
+          apt-get update
+          apt-get install -y git wget ca-certificates build-essential file
+          
+          # Solo para el job de 32 bits, instalamos las librerías multilib
+          if [ "${{ matrix.architecture }}" = "32" ]; then
+            dpkg --add-architecture i386
+            apt-get update
+            # Los paquetes 'sudo' ya no son necesarios dentro del contenedor
+            apt-get install -y gcc-multilib g++-multilib libc6-dev-i386
+          fi
+
       - name: Checkout repositorio
+
         uses: actions/checkout@v4
       
-      - name: Instalar dependencias (Solo 32 bits)
-        if: matrix.architecture == 32
-        run: |
-          sudo dpkg --add-architecture i386
-          sudo apt-get update
-          sudo apt-get install -y gcc-multilib g++-multilib libc6-dev-i386
-
       - name: Instalar Lua 5.3
         uses: leafo/gh-actions-lua@v10
         with:
           luaVersion: "5.3.6"
-        # ### CAMBIO IMPORTANTE: Forzar flags de compilación para 32 bits
+
         env:
           CFLAGS: ${{ matrix.architecture == 32 && '-m32' || '' }}
           LDFLAGS: ${{ matrix.architecture == 32 && '-m32' || '' }}
       
       - name: Verificar instalación de Lua
         run: |
-          echo "Verificando binario:"
-          file $(which lua)
-          lua -v
-          luac -v
+          echo "Verificando binario de luac (debe coincidir con ${{ matrix.architecture }} bits):"
+          file $(which luac)
       
       - name: Crear carpeta de salida
         run: mkdir -p compilados_${{ matrix.architecture }}
@@ -49,38 +57,42 @@ jobs:
       - name: Compilar archivos Lua para ${{ matrix.architecture }} bits
         run: |
           echo "=== Compilando para ${{ matrix.architecture }} bits ==="
-          # Compilar todos los archivos .lua en la raíz
-          shopt -s nullglob # Evita errores si no hay archivos .lua
+          shopt -s nullglob
           for archivo in *.lua; do
             nombre_base="${archivo%.lua}"
             salida="compilados_${{ matrix.architecture }}/${nombre_base}-${{ matrix.architecture }}.lua"
-            
             echo "Compilando: $archivo -> $salida"
-            # luac -s (strip debug info) -o (output)
             if luac -s -o "$salida" "$archivo"; then
               echo "✓ Éxito: $salida"
             else
-              echo "✗ Error: $archivo"
+              echo "✗ Error al compilar $archivo"
               exit 1
             fi
           done
 
-      - name: Verificar arquitectura de bytecode (Byte 12)
+      - name: 🛡️ Test de Calidad (Verificar Arquitectura de Bytecode)
         run: |
-          echo "=== Verificando arquitectura (Size of size_t) ==="
+          echo "=== Verificando arquitectura (Byte 13: Size of size_t) ==="
           shopt -s nullglob
           for archivo in compilados_${{ matrix.architecture }}/*.lua; do
             echo -n "📄 $(basename $archivo): "
-            # Byte 12 en header Lua 5.3 indica sizeof(size_t)
-            size_byte=$(hexdump -s 12 -n 1 -e '1/1 "%02x"' "$archivo")
+            # 🚨 CAMBIO DE VERIFICACIÓN: Usamos -s 13 para leer el byte de arquitectura (size_t)
+            size_byte=$(hexdump -s 13 -n 1 -e '1/1 "%02x"' "$archivo")
+            
             if [ "$size_byte" = "04" ]; then
-              echo "✅ 32 bits (Correcto)"
-              if [ "${{ matrix.architecture }}" != "32" ]; then echo "⚠️ ALERTA: Se esperaba 64 bits"; exit 1; fi
+              echo "✅ 32 bits detectado"
+              if [ "${{ matrix.architecture }}" != "32" ]; then 
+                echo "❌ ERROR: Se esperaba 64 bits. Compilación fallida."
+                exit 1
+              fi
             elif [ "$size_byte" = "08" ]; then
-              echo "✅ 64 bits (Correcto)"
-              if [ "${{ matrix.architecture }}" != "64" ]; then echo "⚠️ ALERTA: Se esperaba 32 bits"; exit 1; fi
+              echo "✅ 64 bits detectado"
+              if [ "${{ matrix.architecture }}" != "64" ]; then 
+                echo "❌ ERROR: Se esperaba 32 bits. Compilación fallida."
+                exit 1
+              fi
             else
-              echo "⚠️ Desconocido ($size_byte)"
+              echo "⚠️ Byte desconocido ($size_byte)"
             fi
           done
       
@@ -110,7 +122,7 @@ jobs:
     needs: compile-lua
     runs-on: ubuntu-latest
     if: github.event.inputs.create_release != ''
-    permissions: # Importante para poder escribir releases
+    permissions:
       contents: write
     
     steps:
@@ -119,10 +131,7 @@ jobs:
         with:
           pattern: release-tarball-*
           path: ./release-files
-          merge-multiple: true # ### CAMBIO IMPORTANTE: Evita subcarpetas
-      
-      - name: Listar archivos descargados
-        run: ls -R ./release-files
+          merge-multiple: true
       
       - name: Crear Release
         uses: softprops/action-gh-release@v1
@@ -131,7 +140,7 @@ jobs:
           name: Release ${{ github.event.inputs.create_release }}
           files: ./release-files/*.tar.gz
           body: |
-            ## 🎉 Compilación Lua 5.3.6
+            ## Compilación Lua 5.3.6
             
             Archivos compilados para 32 y 64 bits.
             
@@ -139,9 +148,10 @@ jobs:
             - `32bits`: Bytecode compatible con binarios x86
             - `64bits`: Bytecode compatible con binarios x64
             
-            ### 🔍 Verificación (Linux/Mac):
+            ### Verificación (Linux/Mac):
             ```bash
-            hexdump -s 12 -n 1 -e '1/1 "%02x\n"' archivo.lua
+            # Se usa -s 13 para obtener el byte de arquitectura (size_t)
+            hexdump -s 13 -n 1 -e '1/1 "%02x\n"' archivo.lua
             # 04 = 32 bits
             # 08 = 64 bits
             ```
