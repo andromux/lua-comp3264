@@ -1,7 +1,6 @@
 name: Compilar Lua 5.3.X
 
 on:
-  # Permite la ejecución manual desde la interfaz de GitHub
   workflow_dispatch:
     inputs:
       create_release:
@@ -11,7 +10,6 @@ on:
 
 jobs:
   compile-lua:
-    # 🚨 CORRECCIÓN 1: Aislamiento completo con contenedor para evitar interferencia entre 32/64 bits.
     container: ubuntu:22.04 
     runs-on: ubuntu-latest
     strategy:
@@ -24,8 +22,8 @@ jobs:
       - name: Instalar paquetes base y dependencias
         run: |
           apt-get update
-          # 🚨 CORRECCIÓN 2: Instalamos 'sudo' para que la acción 'leafo/gh-actions-lua' funcione dentro del contenedor.
-          apt-get install -y git wget ca-certificates build-essential file sudo
+          # 🚨 CORRECCIÓN: Instalamos 'bsdmainutils' para el comando 'hexdump'.
+          apt-get install -y git wget ca-certificates build-essential file sudo curl bsdmainutils
           
           # Solo para el job de 32 bits, instalamos las librerías multilib
           if [ "${{ matrix.architecture }}" = "32" ]; then
@@ -42,7 +40,6 @@ jobs:
         with:
           luaVersion: "5.3.6"
         env:
-          # Forzamos las flags -m32 solo para el job de 32 bits.
           CFLAGS: ${{ matrix.architecture == 32 && '-m32' || '' }}
           LDFLAGS: ${{ matrix.architecture == 32 && '-m32' || '' }}
       
@@ -55,11 +52,11 @@ jobs:
         run: mkdir -p compilados_${{ matrix.architecture }}
       
       - name: Compilar archivos Lua para ${{ matrix.architecture }} bits
-        # 🚨 CORRECCIÓN 3: Usamos 'shell: bash' para que el comando 'shopt' funcione.
+        # Usamos 'shell: bash' para que el comando 'shopt' funcione.
         shell: bash
         run: |
           echo "=== Compilando para ${{ matrix.architecture }} bits ==="
-          shopt -s nullglob # Permite que el for loop no falle si no hay archivos .lua
+          shopt -s nullglob
           for archivo in *.lua; do
             nombre_base="${archivo%.lua}"
             salida="compilados_${{ matrix.architecture }}/${nombre_base}-${{ matrix.architecture }}.lua"
@@ -73,14 +70,14 @@ jobs:
           done
 
       - name: 🛡️ Test de Calidad (Verificar Arquitectura de Bytecode)
-        # 🚨 CORRECCIÓN 3: Usamos 'shell: bash' para que el comando 'shopt' funcione.
+        # Usamos 'shell: bash' para que el comando 'shopt' funcione.
         shell: bash
         run: |
           echo "=== Verificando arquitectura (Byte 13: Size of size_t) ==="
           shopt -s nullglob
           for archivo in compilados_${{ matrix.architecture }}/*.lua; do
             echo -n "📄 $(basename $archivo): "
-            # Usamos -s 13 (offset D) para leer el byte de arquitectura (size_t)
+            # 'hexdump' ahora está disponible gracias a 'bsdmainutils'
             size_byte=$(hexdump -s 13 -n 1 -e '1/1 "%02x"' "$archivo")
             
             if [ "$size_byte" = "04" ]; then
