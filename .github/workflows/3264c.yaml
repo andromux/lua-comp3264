@@ -1,7 +1,12 @@
 name: Compilar Lua 5.3.X
 
 on:
-  workflow_dispatch: # Solo ejecución manual
+  workflow_dispatch:
+    inputs:
+      create_release:
+        description: '¿Crear release? (Ej: v1.0.0)'
+        required: false
+        type: string
 
 jobs:
   compile-lua:
@@ -15,87 +20,128 @@ jobs:
       - name: Checkout repositorio
         uses: actions/checkout@v4
       
-      - name: Instalar dependencias
+      - name: Instalar dependencias (Solo 32 bits)
+        if: matrix.architecture == 32
         run: |
+          sudo dpkg --add-architecture i386
           sudo apt-get update
-          if [ "${{ matrix.architecture }}" = "32" ]; then
-            sudo dpkg --add-architecture i386
-            sudo apt-get update
-            sudo apt-get install -y gcc-multilib g++-multilib libc6-dev-i386
-          fi
-      
+          sudo apt-get install -y gcc-multilib g++-multilib libc6-dev-i386
+
       - name: Instalar Lua 5.3
         uses: leafo/gh-actions-lua@v10
         with:
           luaVersion: "5.3.6"
+        # ### CAMBIO IMPORTANTE: Forzar flags de compilación para 32 bits
+        env:
+          CFLAGS: ${{ matrix.architecture == 32 && '-m32' || '' }}
+          LDFLAGS: ${{ matrix.architecture == 32 && '-m32' || '' }}
       
       - name: Verificar instalación de Lua
         run: |
+          echo "Verificando binario:"
+          file $(which lua)
           lua -v
           luac -v
       
       - name: Crear carpeta de salida
-        run: |
-          mkdir -p compilados_${{ matrix.architecture }}
+        run: mkdir -p compilados_${{ matrix.architecture }}
       
       - name: Compilar archivos Lua para ${{ matrix.architecture }} bits
         run: |
-          echo "==================================================="
-          echo "  Compilando archivos para ${{ matrix.architecture }} bits"
-          echo "==================================================="
+          echo "=== Compilando para ${{ matrix.architecture }} bits ==="
           # Compilar todos los archivos .lua en la raíz
+          shopt -s nullglob # Evita errores si no hay archivos .lua
           for archivo in *.lua; do
-            if [ -f "$archivo" ]; then
-              nombre_base="${archivo%.lua}"
-              salida="compilados_${{ matrix.architecture }}/${nombre_base}-${{ matrix.architecture }}.lua"
-              echo "Compilando: $archivo -> $salida"
-              if luac -s -o "$salida" "$archivo"; then
-                echo "✓ Compilado exitosamente: $salida"
-              else
-                echo "✗ Error al compilar: $archivo"
-                exit 1
-              fi
+            nombre_base="${archivo%.lua}"
+            salida="compilados_${{ matrix.architecture }}/${nombre_base}-${{ matrix.architecture }}.lua"
+            
+            echo "Compilando: $archivo -> $salida"
+            # luac -s (strip debug info) -o (output)
+            if luac -s -o "$salida" "$archivo"; then
+              echo "✓ Éxito: $salida"
+            else
+              echo "✗ Error: $archivo"
+              exit 1
             fi
           done
-          echo ""
-          echo "==================================================="
-          echo "  Resumen de compilación"
-          echo "==================================================="
-          echo "Archivos compilados:"
-          ls -lh compilados_${{ matrix.architecture }}/
-          echo "==================================================="
+
+      - name: Verificar arquitectura de bytecode (Byte 12)
+        run: |
+          echo "=== Verificando arquitectura (Size of size_t) ==="
+          shopt -s nullglob
+          for archivo in compilados_${{ matrix.architecture }}/*.lua; do
+            echo -n "📄 $(basename $archivo): "
+            # Byte 12 en header Lua 5.3 indica sizeof(size_t)
+            size_byte=$(hexdump -s 12 -n 1 -e '1/1 "%02x"' "$archivo")
+            if [ "$size_byte" = "04" ]; then
+              echo "✅ 32 bits (Correcto)"
+              if [ "${{ matrix.architecture }}" != "32" ]; then echo "⚠️ ALERTA: Se esperaba 64 bits"; exit 1; fi
+            elif [ "$size_byte" = "08" ]; then
+              echo "✅ 64 bits (Correcto)"
+              if [ "${{ matrix.architecture }}" != "64" ]; then echo "⚠️ ALERTA: Se esperaba 32 bits"; exit 1; fi
+            else
+              echo "⚠️ Desconocido ($size_byte)"
+            fi
+          done
       
-      - name: Comprimir archivos compilados
+      - name: Comprimir archivos para release
+        if: github.event.inputs.create_release != ''
         run: |
           cd compilados_${{ matrix.architecture }}
-          tar -czf ../compilados-${{ matrix.architecture }}bits.tar.gz *
+          tar -czf ../lua-compilados-${{ matrix.architecture }}bits-${{ github.event.inputs.create_release }}.tar.gz *
           cd ..
       
-      - name: Subir artefactos compilados
+      - name: Subir artefactos compilados (Raw)
         uses: actions/upload-artifact@v4
         with:
           name: compilados-lua-${{ matrix.architecture }}bits
-          path: |
-            compilados_${{ matrix.architecture }}/
-            compilados-${{ matrix.architecture }}bits.tar.gz
+          path: compilados_${{ matrix.architecture }}/
           retention-days: 30
-      
-      - name: Crear Release (solo en tags)
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v1
-        with:
-          files: compilados-${{ matrix.architecture }}bits.tar.gz
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  summary:
+      - name: Subir tar.gz como artefacto (Para Release)
+        if: github.event.inputs.create_release != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-tarball-${{ matrix.architecture }}bits
+          path: lua-compilados-${{ matrix.architecture }}bits-${{ github.event.inputs.create_release }}.tar.gz
+          retention-days: 1
+
+  create-release:
     needs: compile-lua
     runs-on: ubuntu-latest
-    if: always()
+    if: github.event.inputs.create_release != ''
+    permissions: # Importante para poder escribir releases
+      contents: write
     
     steps:
-      - name: Resumen de compilación
-        run: |
-          echo "🎉 Proceso de compilación completado"
-          echo "✅ Arquitecturas compiladas: 32-bit y 64-bit"
-          echo "📦 Los artefactos están disponibles en la pestaña 'Actions'"
+      - name: Descargar todos los artefactos de release
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-tarball-*
+          path: ./release-files
+          merge-multiple: true # ### CAMBIO IMPORTANTE: Evita subcarpetas
+      
+      - name: Listar archivos descargados
+        run: ls -R ./release-files
+      
+      - name: Crear Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.event.inputs.create_release }}
+          name: Release ${{ github.event.inputs.create_release }}
+          files: ./release-files/*.tar.gz
+          body: |
+            ## 🎉 Compilación Lua 5.3.6
+            
+            Archivos compilados para 32 y 64 bits.
+            
+            ### 📦 Archivos:
+            - `32bits`: Bytecode compatible con binarios x86
+            - `64bits`: Bytecode compatible con binarios x64
+            
+            ### 🔍 Verificación (Linux/Mac):
+            ```bash
+            hexdump -s 12 -n 1 -e '1/1 "%02x\n"' archivo.lua
+            # 04 = 32 bits
+            # 08 = 64 bits
+            ```
