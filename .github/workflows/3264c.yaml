@@ -65,6 +65,12 @@ jobs:
           ls -lh compilados_${{ matrix.architecture }}/
           echo "==================================================="
       
+      - name: Comprimir archivos compilados
+        run: |
+          cd compilados_${{ matrix.architecture }}
+          tar -czf ../compilados-${{ matrix.architecture }}bits.tar.gz *
+          cd ..
+      
       - name: Subir artefactos compilados
         uses: actions/upload-artifact@v4
         with:
