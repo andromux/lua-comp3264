@@ -1,98 +1,92 @@
-name: 3264C Lua 5.3.X
+name: Compilar Lua 5.3.X
 
 on:
-  push:
-  workflow_dispatch:
+  workflow_dispatch: # Solo ejecución manual
 
 jobs:
   compile-lua:
     runs-on: ubuntu-latest
-    
     strategy:
       fail-fast: false
       matrix:
         architecture: [32, 64]
     
     steps:
-    - name: Checkout repositorio
-      uses: actions/checkout@v4
-    
-    - name: Instalar dependencias
-      run: |
-        sudo apt-get update
-        if [ "${{ matrix.architecture }}" = "32" ]; then
-          sudo dpkg --add-architecture i386
+      - name: Checkout repositorio
+        uses: actions/checkout@v4
+      
+      - name: Instalar dependencias
+        run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-multilib g++-multilib libc6-dev-i386
-        fi
-    
-    - name: Instalar Lua 5.3
-      uses: leafo/gh-actions-lua@v10
-      with:
-        luaVersion: "5.3.6"
-    
-    - name: Verificar instalación de Lua
-      run: |
-        lua -v
-        luac -v
-    
-    - name: Crear carpeta de salida
-      run: |
-        mkdir -p compilados_${{ matrix.architecture }}
-    
-    - name: Compilar archivos Lua para ${{ matrix.architecture }} bits
-      run: |
-        echo "==================================================="
-        echo "  Compilando archivos para ${{ matrix.architecture }} bits"
-        echo "==================================================="
-        
-        # Compilar todos los archivos .lua en la raíz
-        for archivo in *.lua; do
-          if [ -f "$archivo" ]; then
-            nombre_base="${archivo%.lua}"
-            salida="compilados_${{ matrix.architecture }}/${nombre_base}-${{ matrix.architecture }}.lua"
-            
-            echo "Compilando: $archivo -> $salida"
-            
-            if luac -s -o "$salida" "$archivo"; then
-              echo "✓ Compilado exitosamente: $salida"
-            else
-              echo "✗ Error al compilar: $archivo"
-              exit 1
-            fi
+          if [ "${{ matrix.architecture }}" = "32" ]; then
+            sudo dpkg --add-architecture i386
+            sudo apt-get update
+            sudo apt-get install -y gcc-multilib g++-multilib libc6-dev-i386
           fi
-        done
-        
-        echo ""
-        echo "==================================================="
-        echo "  Resumen de compilación"
-        echo "==================================================="
-        echo "Archivos compilados:"
-        ls -lh compilados_${{ matrix.architecture }}/
-        echo "==================================================="
-    
-    - name: Comprimir archivos compilados
-      run: |
-        cd compilados_${{ matrix.architecture }}
-        tar -czf ../compilados-${{ matrix.architecture }}bits.tar.gz *
-        cd ..
-    
-    - name: Subir artefactos compilados
-      uses: actions/upload-artifact@v4
-      with:
-        name: compilados-lua-${{ matrix.architecture }}bits
-        path: |
-          compilados_${{ matrix.architecture }}/
-          compilados-${{ matrix.architecture }}bits.tar.gz
-        retention-days: 30
-    
-    - name: Crear Release (solo en tags)
-      if: startsWith(github.ref, 'refs/tags/')
-      uses: softprops/action-gh-release@v1
-      with:
-        files: compilados-${{ matrix.architecture }}bits.tar.gz
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Instalar Lua 5.3
+        uses: leafo/gh-actions-lua@v10
+        with:
+          luaVersion: "5.3.6"
+      
+      - name: Verificar instalación de Lua
+        run: |
+          lua -v
+          luac -v
+      
+      - name: Crear carpeta de salida
+        run: |
+          mkdir -p compilados_${{ matrix.architecture }}
+      
+      - name: Compilar archivos Lua para ${{ matrix.architecture }} bits
+        run: |
+          echo "==================================================="
+          echo "  Compilando archivos para ${{ matrix.architecture }} bits"
+          echo "==================================================="
+          # Compilar todos los archivos .lua en la raíz
+          for archivo in *.lua; do
+            if [ -f "$archivo" ]; then
+              nombre_base="${archivo%.lua}"
+              salida="compilados_${{ matrix.architecture }}/${nombre_base}-${{ matrix.architecture }}.lua"
+              echo "Compilando: $archivo -> $salida"
+              if luac -s -o "$salida" "$archivo"; then
+                echo "✓ Compilado exitosamente: $salida"
+              else
+                echo "✗ Error al compilar: $archivo"
+                exit 1
+              fi
+            fi
+          done
+          echo ""
+          echo "==================================================="
+          echo "  Resumen de compilación"
+          echo "==================================================="
+          echo "Archivos compilados:"
+          ls -lh compilados_${{ matrix.architecture }}/
+          echo "==================================================="
+      
+      - name: Comprimir archivos compilados
+        run: |
+          cd compilados_${{ matrix.architecture }}
+          tar -czf ../compilados-${{ matrix.architecture }}bits.tar.gz *
+          cd ..
+      
+      - name: Subir artefactos compilados
+        uses: actions/upload-artifact@v4
+        with:
+          name: compilados-lua-${{ matrix.architecture }}bits
+          path: |
+            compilados_${{ matrix.architecture }}/
+            compilados-${{ matrix.architecture }}bits.tar.gz
+          retention-days: 30
+      
+      - name: Crear Release (solo en tags)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v1
+        with:
+          files: compilados-${{ matrix.architecture }}bits.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   summary:
     needs: compile-lua
@@ -100,8 +94,8 @@ jobs:
     if: always()
     
     steps:
-    - name: Resumen de compilación
-      run: |
-        echo "Proceso de compilación completado"
-        echo "Arquitecturas compiladas: 32-bit y 64-bit"
-        echo "📦 Los artefactos están disponibles en la pestaña 'Actions'"
+      - name: Resumen de compilación
+        run: |
+          echo "🎉 Proceso de compilación completado"
+          echo "✅ Arquitecturas compiladas: 32-bit y 64-bit"
+          echo "📦 Los artefactos están disponibles en la pestaña 'Actions'"
